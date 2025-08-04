@@ -4,21 +4,23 @@ import asyncio
 import discord
 from discord.ext import commands, voice_recv
 import time
+from collections import defaultdict, deque
 
 now = time.monotonic()  # em vez de asyncio.get_event_loop().time()
 
 load_dotenv()
 
-# As credenciais NUNCA devem estar hard‑coded no código
 # Defina a variável de ambiente DISCORD_BOT_TOKEN com o token gerado no portal de desenvolvedor.
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-#TOKEN = "QqF5h4ov_opNldlBznGodn1qF30zsb6e"
 
-# Canal de texto onde será enviado o alerta (substitua pelo ID real)
+# Canal de texto onde será enviado o alerta
 ALERT_CHANNEL_ID = 1402039658375938240  # ID do canal de texto
 
 # Limite de volume (0–127). Ajuste conforme testes.
 VOLUME_THRESHOLD = 120
+
+WINDOW_SECONDS = 3 # janela de tempo para contar o número de ocorrências
+MAX_OCCURRENCES = 2 # quantos picos para classificar earrape
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -42,7 +44,7 @@ async def join_and_monitor(ctx):
 
     # Dicionário para evitar alertas repetidos em sequência
     recent_alerts = {}
-
+    user_events: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=MAX_OCCURRENCES))
 
     def callback(user: discord.Member | None, data: voice_recv.VoiceData):
 
@@ -59,23 +61,29 @@ async def join_and_monitor(ctx):
         # O exemplo da biblioteca usa 127 - (value & 127) como potência inversa
         power = 127 - (value & 0x7F)
 
-        # Se ultrapassar o limite e não tiver sido alertado recentemente
-        if power >= VOLUME_THRESHOLD and user.id not in recent_alerts:
+        # Registra o Timestamp caso passe o limite
+        #if power >= VOLUME_THRESHOLD and user.id not in recent_alerts:
+        if power >= VOLUME_THRESHOLD:
+            print(f"{user} -> {value} ({ext})")
+            now = time.monotonic()
+            events = user_events[user.id]
+            events.append(now)
 
-            recent_alerts[user.id] = time.monotonic()
+            # remove eventos antigos fora da janela
+
+            while events and now - events[0] > WINDOW_SECONDS:
+                events.popleft()
+
+            if len(events) >= MAX_OCCURRENCES:
+            #recent_alerts[user.id] = time.monotonic()
 
             # Envia a mensagem de alerta de forma assíncrona
-            async def send_alert():
-                msg = f"earrape identificado, id {user.id}"
-                await alert_channel.send(msg)
+                async def send_alert():
+                    msg = f"earrape identificado, id {user.id}"
+                    await alert_channel.send(msg)
 
-            asyncio.run_coroutine_threadsafe(send_alert(), bot.loop)
-
-        # Remove usuário do mapa após 10 segundos para permitir novo alerta
-        now = time.monotonic()
-        expired = [uid for uid, t in recent_alerts.items() if now - t > 1]
-        for uid in expired:
-            recent_alerts.pop(uid, None)
+                asyncio.run_coroutine_threadsafe(send_alert(), bot.loop)
+                events.clear()
 
     # Inicia a escuta usando BasicSink:contentReference[oaicite:6]{index=6}
     vc.listen(voice_recv.BasicSink(callback))
