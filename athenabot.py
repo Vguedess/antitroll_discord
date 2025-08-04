@@ -5,6 +5,8 @@ import discord
 from discord.ext import commands, voice_recv
 import time
 
+now = time.monotonic()  # em vez de asyncio.get_event_loop().time()
+
 load_dotenv()
 
 # As credenciais NUNCA devem estar hard‑coded no código
@@ -16,7 +18,7 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ALERT_CHANNEL_ID = 1402039658375938240  # ID do canal de texto
 
 # Limite de volume (0–127). Ajuste conforme testes.
-VOLUME_THRESHOLD = 110
+VOLUME_THRESHOLD = 120
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -41,7 +43,9 @@ async def join_and_monitor(ctx):
     # Dicionário para evitar alertas repetidos em sequência
     recent_alerts = {}
 
+
     def callback(user: discord.Member | None, data: voice_recv.VoiceData):
+
         # Ignora pacotes sem usuário associado
         if user is None:
             return
@@ -57,7 +61,8 @@ async def join_and_monitor(ctx):
 
         # Se ultrapassar o limite e não tiver sido alertado recentemente
         if power >= VOLUME_THRESHOLD and user.id not in recent_alerts:
-            recent_alerts[user.id] = asyncio.get_event_loop().time()
+
+            recent_alerts[user.id] = time.monotonic()
 
             # Envia a mensagem de alerta de forma assíncrona
             async def send_alert():
@@ -67,8 +72,8 @@ async def join_and_monitor(ctx):
             asyncio.run_coroutine_threadsafe(send_alert(), bot.loop)
 
         # Remove usuário do mapa após 10 segundos para permitir novo alerta
-        now = asyncio.get_event_loop().time()
-        expired = [uid for uid, t in recent_alerts.items() if now - t > 10]
+        now = time.monotonic()
+        expired = [uid for uid, t in recent_alerts.items() if now - t > 1]
         for uid in expired:
             recent_alerts.pop(uid, None)
 
