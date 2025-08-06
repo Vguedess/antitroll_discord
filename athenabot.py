@@ -13,8 +13,8 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN") # Defina a variável de ambiente DISCORD_
 ALERT_CHANNEL_ID = 1402039658375938240  # ID do canal de texto # Canal de texto onde será enviado o alerta
 
 # PARAMETROS DE DETECÇÃO DE EARRAPE
-VOLUME_THRESHOLD = 125 # Limite de volume (0–135). Ajuste conforme testes.
-WINDOW_SECONDS = 5 # janela de tempo para contar o número de ocorrências
+VOLUME_THRESHOLD = 118 # Limite de volume (0–135). Ajuste conforme testes.
+WINDOW_SECONDS = 10 # janela de tempo para contar o número de ocorrências
 MAX_OCCURRENCES = 5 # quantos picos para classificar earrape
 
 #Fila processamento de pacotes
@@ -74,6 +74,7 @@ async def on_ready() -> None:
 
 async def audio_worker(alert_channel: discord.TextChannel):
     """Tarefa que consome pacotes da final e processa"""
+    print(f' --- --- ---\n   audio_worker()   \n   R U N N I N G   \n --- --- ---')
     while True:
         user, power = await audio_queue.get()
         if user is None:
@@ -85,10 +86,26 @@ async def audio_worker(alert_channel: discord.TextChannel):
             events.popleft()
         if len(events) >= MAX_OCCURRENCES:
             await alert_channel.send(f"earrape identificado, id {user.id}")
+            print(f' --- --- --- \n   events    \n --- --- ---\n {events} \n --- --- ---')
+            print(f' --- --- --- \n   user.id   \n --- --- --- \n {user.id} \n --- --- ---')
             events.clear()
+
+def callback(user:discord.Member | None, data: voice_recv.VoiceData):
+    # print(f' --- --- ---\n   callback()   \n   R U N N I N G   \n --- --- ---')
+    if user is None or user.bot:
+        return
+    ext = data.packet.extension_data.get(voice_recv.ExtensionID.audio_power)
+    if not ext:
+        return
+    value = int.from_bytes(ext, "big")
+    power = 127 - (value & 0x7f)
+    if power >= VOLUME_THRESHOLD:
+        print(f' --- --- ---\n   callback()   \n   power >= VOLUME_THRESHOLD   \n   {power} >= {VOLUME_THRESHOLD}   \n --- --- ---')
+        asyncio.run_coroutine_threadsafe(audio_queue.put((user,power)), bot.loop)
 
 async def join_and_monitor(ctx):
     """Entra no canal de voz do autor e começa a monitorar."""
+    print(f' --- --- ---\n   join_and_monitor()   \n   R U N N I N G   \n --- --- ---')
     voice_state = ctx.author.voice
     if not voice_state or not voice_state.channel:
         await ctx.reply("Você precisa estar em um canal de voz.")
@@ -97,63 +114,27 @@ async def join_and_monitor(ctx):
     # Conecta usando VoiceRecvClient para receber áudio:contentReference[oaicite:4]{index=4}
     vc = await voice_state.channel.connect(cls=voice_recv.VoiceRecvClient)
 
-    # Pega o canal de texto onde os alertas serão enviados
-    alert_channel = ctx.guild.get_channel(ALERT_CHANNEL_ID)
+    # inicia worker para processar pacotes
+    alert_channel = ctx.guild.get_channel(ALERT_CHANNEL_ID)  # Pega o canal de texto onde os alertas serão enviados
+    worker_task = asyncio.create_task(audio_worker(alert_channel))
 
-    # Dicionário para evitar alertas repetidos em sequência
-    recent_alerts = {}
-    user_events: dict[int, deque[float]] = defaultdict(lambda: deque(maxlen=MAX_OCCURRENCES))
-
-    def callback(user: discord.Member | None, data: voice_recv.VoiceData):
-
-        # Ignora pacotes sem usuário associado
-        if user is None:
-            return
-
-        # Obtém o valor da potência de áudio:contentReference[oaicite:5]{index=5}.
-        ext = data.packet.extension_data.get(voice_recv.ExtensionID.audio_power)
-        if not ext:
-            return
-
-        value = int.from_bytes(ext, "big")
-        # O exemplo da biblioteca usa 127 - (value & 127) como potência inversa
-        power = 127 - (value & 0x7F)
-
-        # Registra o Timestamp caso passe o limite
-        #if power >= VOLUME_THRESHOLD and user.id not in recent_alerts:
-        if power >= VOLUME_THRESHOLD:
-            print(f"{user} -> {value} ({ext})")
-            now = time.monotonic()
-            events = user_events[user.id]
-            events.append(now)
-
-            # remove eventos antigos fora da janela
-            while events and now - events[0] > WINDOW_SECONDS:
-                events.popleft()
-
-            if len(events) >= MAX_OCCURRENCES:
-            #recent_alerts[user.id] = time.monotonic()
-
-            # Envia a mensagem de alerta de forma assíncrona
-                async def send_alert():
-                    msg = f"earrape identificado, id {user.id}"
-                    await alert_channel.send(msg)
-
-                asyncio.run_coroutine_threadsafe(send_alert(), bot.loop)
-                events.clear()
-
-    # Inicia a escuta usando BasicSink:contentReference[oaicite:6]{index=6}
     vc.listen(voice_recv.BasicSink(callback))
+
+    await ctx.send("Monitoramento Iniciado...")
+
 
 @bot.command()
 async def monitor(ctx):
     """Comando para começar a monitorar o volume no canal de voz."""
+    print(f' --- --- ---\n   monitor()   \n   R U N N I N G   \n --- --- ---')
     await join_and_monitor(ctx)
 
 @bot.command()
 async def stopmonitor(ctx):
     """Para de monitorar e desconecta do canal de voz."""
+    print(f' --- --- ---\n   stopmonitor()   \n   R U N N I N G   \n --- --- ---')
     if ctx.voice_client:
+        await audio_queue.put((None, None)) # sinal para encerrar worker
         ctx.voice_client.stop()
         await ctx.voice_client.disconnect()
         await ctx.reply("Monitoramento parado.")
